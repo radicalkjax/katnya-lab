@@ -56,7 +56,7 @@ jobs:
         name: probes
         run: |
           T=$(command -v timeout || command -v gtimeout || true)
-          p() { o=$($T ${T:+20} "$@" 2>&1); rc=$?; echo "LAB rc=$rc $(echo "$o" | tail -1 | cut -c1-60) :: $*"; }
+          p() { o=$($T ${T:+20} "$@" 2>&1) && rc=0 || rc=$?; echo "LAB rc=$rc $(echo "$o" | tail -1 | cut -c1-60) :: $*"; }
           p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://api.github.com/zen
           p git ls-remote https://github.com/${{ github.repository }} HEAD
           p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/README.md
