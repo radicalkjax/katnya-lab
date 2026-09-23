@@ -5,7 +5,7 @@ permissions: { contents: read }
 env:
   URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/bootstrap/asset.bin
   SHA: d8a26b60f7c8455d5279c6042410d053040560bf6681885b9db29b60370b66a0
-  BAD: 0000000000000000000000000000000000000000000000000000000000000000
+  BAD: 'e8a26b60f7c8455d5279c6042410d053040560bf6681885b9db29b60370b66a0'
 jobs:
   posix:
     strategy: { fail-fast: false, matrix: { os: [ubuntu-24.04, macos-15, windows-2025] } }
