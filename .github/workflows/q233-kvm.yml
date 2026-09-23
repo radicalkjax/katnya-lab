@@ -14,5 +14,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
           echo "LAB after udev: $(ls -l /dev/kvm 2>&1) :: $(k)"
-          E=${ANDROID_HOME:-/usr/local/lib/android/sdk}/emulator/emulator
+          A=${ANDROID_HOME:-/usr/local/lib/android/sdk}; E=$A/emulator/emulator; SM=$(ls $A/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "LAB ANDROID_HOME=$A sdkmanager=${SM:-none}"
+          [ -x "$E" ] || [ -z "$SM" ] || yes | $SM --install emulator >/dev/null 2>&1 || true
           if [ -x "$E" ]; then echo "LAB emulator -accel-check: $($E -accel-check 2>&1 | tr '\n' ' ' | cut -c1-200)"; else echo "LAB no Android emulator in image ($E)"; fi
