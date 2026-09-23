@@ -1,0 +1,60 @@
+# Q-212 (S17) bootstrap stub portability: download raw asset, verify SHA-256 with built-ins, fail on mismatch
+name: q212-bootstrap
+on: workflow_dispatch
+permissions: { contents: read }
+env:
+  URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/bootstrap/asset.bin
+  SHA: d8a26b60f7c8455d5279c6042410d053040560bf6681885b9db29b60370b66a0
+  BAD: 0000000000000000000000000000000000000000000000000000000000000000
+jobs:
+  posix:
+    strategy: { fail-fast: false, matrix: { os: [ubuntu-24.04, macos-15, windows-2025] } }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          echo "LAB ${{ matrix.os }} sh=$(command -v sh) sha256sum=$(command -v sha256sum || echo none) shasum=$(command -v shasum || echo none)"
+          sh bootstrap/stub.sh "$URL" "$SHA" | sed 's/^/LAB /'
+          if sh bootstrap/stub.sh "$URL" "$BAD" 2>err.txt; then echo "LAB MISMATCH NOT DETECTED"; exit 1; else echo "LAB mismatch rc=$? $(cat err.txt) leftover=$(ls katnya-asset.bin 2>/dev/null || echo none)"; fi
+  containers:
+    runs-on: ubuntu-24.04
+    strategy: { fail-fast: false, matrix: { image: ['alpine:3', 'busybox:musl', 'busybox:latest'] } }
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          r() { docker run --rm -v "$PWD/bootstrap:/b:ro" -w /tmp ${{ matrix.image }} sh /b/stub.sh "$@"; }
+          docker run --rm ${{ matrix.image }} sh -c 'echo "LAB image: $(cat /etc/alpine-release 2>/dev/null || busybox 2>&1 | head -1)"; command -v curl wget sha256sum shasum | sed "s/^/LAB tool /"'
+          r "$URL" "$SHA" 2>&1 | sed 's/^/LAB good: /'; echo "LAB good rc=${PIPESTATUS[0]}"
+          r "$URL" "$BAD" 2>&1 | sed 's/^/LAB bad: /'; echo "LAB bad rc=${PIPESTATUS[0]}"
+  powershell:
+    strategy:
+      fail-fast: false
+      matrix: { os: [windows-2025, windows-11-arm], shell: [pwsh, powershell] }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: '${{ matrix.shell }}' } }
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          $ErrorActionPreference = "Continue"
+          "LAB ${{ matrix.os }}/${{ matrix.shell }} PS $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition)"
+          & ./bootstrap/stub.ps1 -Url $env:URL -Sha256 $env:SHA | % { "LAB $_" }
+          if (-not $?) { throw "good case failed" }
+          & ${{ matrix.shell }} -NoProfile -ExecutionPolicy Bypass -File ./bootstrap/stub.ps1 -Url $env:URL -Sha256 $env:BAD 2>&1 | % { "LAB bad: $_" }
+          "LAB bad rc=$LASTEXITCODE leftover=$(Test-Path katnya-asset.bin)"
+          if ($LASTEXITCODE -eq 0) { throw "mismatch not detected" }
+          exit 0
+  no-git-bash:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          $env:PATH = ($env:PATH -split ';' | ? { $_ -notmatch '\\Git\\|\\msys|\\mingw|cygwin' }) -join ';'
+          foreach ($c in 'sh','bash','sha256sum','shasum','curl') { $x = Get-Command $c -ErrorAction SilentlyContinue; "LAB which $c = $(if ($x) { $x.Source } else { 'none' })" }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File ./bootstrap/stub.ps1 -Url $env:URL -Sha256 $env:SHA | % { "LAB $_" }
+          "LAB good rc=$LASTEXITCODE"; if ($LASTEXITCODE -ne 0) { throw "good failed" }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File ./bootstrap/stub.ps1 -Url $env:URL -Sha256 $env:BAD 2>&1 | % { "LAB bad: $_" }
+          "LAB bad rc=$LASTEXITCODE"; if ($LASTEXITCODE -eq 0) { throw "mismatch not detected" }
+          exit 0

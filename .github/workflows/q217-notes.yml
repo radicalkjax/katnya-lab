@@ -1,0 +1,20 @@
+# Q-217 does actions/checkout fetch refs/notes/*? can the job push refs/notes/katnya?
+name: q217-notes
+on: workflow_dispatch
+permissions: { contents: write }
+jobs:
+  notes:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with: { path: d1 }
+      - uses: actions/checkout@v7
+        with: { path: d0, fetch-depth: 0 }
+      - run: |
+          echo "LAB remote notes: $(git -C d1 ls-remote origin 'refs/notes/*' | tr '\n' ' ')"
+          for d in d1 d0; do echo "LAB $d local notes refs: [$(git -C $d for-each-ref --format='%(refname)' refs/notes | tr '\n' ' ')] refspec: $(git -C $d config --get-all remote.origin.fetch | tr '\n' ' ')"; done
+          cd d1 && git config user.name lab && git config user.email lab@users.noreply.github.com
+          git fetch -q origin 'refs/notes/*:refs/notes/*' && echo "LAB explicit fetch notes: $(git for-each-ref --format='%(refname)' refs/notes | tr '\n' ' ')"
+          git notes --ref=katnya add -f -m "ci-note run ${{ github.run_id }}" HEAD
+          git push origin refs/notes/katnya 2>&1 | tail -2 | sed 's/^/LAB push: /'
+          echo "LAB remote notes after: $(git ls-remote origin 'refs/notes/*' | tr '\n' ' ')"

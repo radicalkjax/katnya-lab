@@ -1,0 +1,37 @@
+# Q-230 (S18) reproducible builds across runner images
+name: q230-repro
+on: workflow_dispatch
+permissions: { contents: read }
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-24.04, ubuntu-26.04], target: [x86_64-unknown-linux-musl, x86_64-unknown-linux-gnu] }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash, working-directory: harness } }
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          command -v rustup >/dev/null || { curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none; echo "$HOME/.cargo/bin" >> $GITHUB_PATH; export PATH=$HOME/.cargo/bin:$PATH; }
+          rustup toolchain install 1.98.1 --profile minimal --target ${{ matrix.target }} && rustup default 1.98.1
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools >/dev/null
+          echo "LAB ${{ matrix.os }} image=$ImageVersion cc=$(cc --version | head -1) ld=$(ld --version | head -1)"
+      - run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$(rustc --print sysroot)=/rustc --remap-path-prefix=$GITHUB_WORKSPACE=/src"
+          export CFLAGS="-ffile-prefix-map=$HOME/.cargo=/cargo -ffile-prefix-map=$GITHUB_WORKSPACE=/src"
+          cargo build --locked --release --target ${{ matrix.target }} 2>&1 | tail -1
+          b=target/${{ matrix.target }}/release/stack-harness
+          echo "LAB ${{ matrix.os }} ${{ matrix.target }} $(sha256sum $b | cut -d' ' -f1) size=$(stat -c%s $b) $(file -b $b | cut -c1-90)"
+          mkdir -p ../out && cp $b ../out/stack-harness
+      - uses: actions/upload-artifact@v7
+        with: { name: 'bin-${{ matrix.os }}-${{ matrix.target }}', path: out/stack-harness, retention-days: 3 }
+  compare:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+      - run: |
+          sha256sum bin-*/stack-harness | sed 's/^/LAB /'
+          for t in musl gnu; do a=bin-ubuntu-24.04-x86_64-unknown-linux-$t/stack-harness; b=bin-ubuntu-26.04-x86_64-unknown-linux-$t/stack-harness
+            if cmp -s $a $b; then echo "LAB $t IDENTICAL"; else echo "LAB $t DIFFER: $(cmp -l $a $b | wc -l) bytes differ"; fi; done

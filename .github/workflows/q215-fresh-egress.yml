@@ -1,0 +1,106 @@
+# Q-215 runner freshness (marker in job 1, absent in job 2) + in-VM default-deny egress
+name: q215-fresh-egress
+on: workflow_dispatch
+permissions: { contents: read }
+jobs:
+  mark:
+    strategy: { fail-fast: false, matrix: { os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025] } }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash } }
+    steps:
+      - run: &ids |
+          case "$RUNNER_OS" in
+            Linux) mid=$(cat /etc/machine-id); boot=$(cat /proc/sys/kernel/random/boot_id);;
+            macOS) mid=$(ioreg -rd1 -c IOPlatformExpertDevice | awk -F'"' '/IOPlatformUUID/{print $4}'); boot=$(sysctl -n kern.boottime | tr -d ' ');;
+            Windows) mid=$(powershell -NoProfile -c '(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Cryptography).MachineGuid'); boot=$(powershell -NoProfile -c '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o")');;
+          esac
+          echo "LAB ${{ github.job }} ${{ matrix.os }} host=$(hostname) machine-id=$mid boot=$boot image=$ImageVersion runner=$RUNNER_NAME"
+          for d in "$RUNNER_TEMP/.." /tmp "$HOME"; do ls -a "$d" 2>/dev/null | grep -q '^katnya-marker$' && echo "LAB MARKER PRESENT in $d: $(cat "$d/katnya-marker")" || echo "LAB marker absent in $d"; done
+      - run: for d in "$RUNNER_TEMP/.." /tmp "$HOME"; do echo "run=${{ github.run_id }} job=mark" > "$d/katnya-marker"; done; echo "LAB markers written"
+  check:
+    needs: mark
+    strategy: { fail-fast: false, matrix: { os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025] } }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash } }
+    steps:
+      - run: *ids
+  egress-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: lock down (nftables default-deny output, allow lo, DNS, established, GitHub meta api/git/web)
+        run: |
+          curl -fsS https://api.github.com/meta > meta.json
+          jq -r '(.api+.git+.web)[]' meta.json | grep -v : | sort -u | paste -sd, > v4.txt
+          jq -r '(.api+.git+.web)[]' meta.json | grep : | sort -u | paste -sd, > v6.txt
+          sudo nft -f - <<NFT
+          table inet katnya {
+            set gh4 { type ipv4_addr; flags interval; elements = { $(cat v4.txt) } }
+            set gh6 { type ipv6_addr; flags interval; elements = { $(cat v6.txt) } }
+            chain out { type filter hook output priority 0; policy drop;
+              oif lo accept
+              ct state established,related accept
+              udp dport 53 accept
+              tcp dport 53 accept
+              ip daddr 168.63.129.16 accept
+              ip daddr 169.254.169.254 accept
+              ip daddr @gh4 accept
+              ip6 daddr @gh6 accept
+              counter log prefix "katnya-drop " drop
+            }
+          }
+          NFT
+          echo "LAB nft loaded: $(wc -c < v4.txt) bytes v4 set"
+      - &probe
+        name: probes
+        run: |
+          T=$(command -v timeout || command -v gtimeout || true)
+          p() { if $T ${T:+20} "$@" >/dev/null 2>&1; then echo "LAB OK   $*"; else echo "LAB FAIL $*"; fi; }
+          p curl -fsS -m 15 https://api.github.com/zen
+          p git ls-remote https://github.com/${{ github.repository }} HEAD
+          p curl -fsS -m 15 -o /dev/null https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/README.md
+          p curl -fsS -m 15 -o /dev/null https://objects.githubusercontent.com/
+          p curl -fsS -m 15 -o /dev/null https://example.com/
+          p curl -fsS -m 15 -o /dev/null https://index.crates.io/config.json
+          p curl -fsS -m 15 -o /dev/null https://pipelines.actions.githubusercontent.com/
+          p curl -fsS -m 15 -o /dev/null https://results-receiver.actions.githubusercontent.com/
+      - name: upload-artifact while locked
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        timeout-minutes: 4
+        with: { name: locked-linux, path: meta.json, retention-days: 1 }
+      - name: cache-free step logs still stream?
+        run: for i in 1 2 3; do echo "LAB tick $i $(date +%T)"; sleep 20; done
+      - name: unlock
+        if: always()
+        run: sudo nft list chain inet katnya out | grep -E 'counter' | sed 's/^/LAB /'; sudo nft delete table inet katnya; echo "LAB unlocked"
+  egress-macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: lock down (pf default-deny out, allow lo0, DNS, GitHub meta api/git/web)
+        run: |
+          curl -fsS https://api.github.com/meta > meta.json
+          jq -r '(.api+.git+.web)[]' meta.json | sort -u > gh.txt
+          cat > pf.conf <<PF
+          table <gh> persist file "$PWD/gh.txt"
+          set skip on lo0
+          block drop out all
+          pass out quick proto { udp tcp } to any port 53
+          pass out quick to <gh>
+          PF
+          sudo pfctl -f pf.conf 2>&1 | tail -2 | sed 's/^/LAB pfctl: /'; sudo pfctl -E 2>&1 | tail -1 | sed 's/^/LAB /'
+          echo "LAB pf rules:"; sudo pfctl -sr 2>/dev/null | sed 's/^/LAB   /'
+      - *probe
+      - name: upload-artifact while locked
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        timeout-minutes: 4
+        with: { name: locked-macos, path: meta.json, retention-days: 1 }
+      - name: step logs still stream?
+        run: for i in 1 2 3; do echo "LAB tick $i $(date +%T)"; sleep 20; done
+      - name: unlock
+        if: always()
+        run: sudo pfctl -d 2>&1 | tail -1 | sed 's/^/LAB /'; sudo pfctl -F all 2>/dev/null; echo "LAB unlocked"

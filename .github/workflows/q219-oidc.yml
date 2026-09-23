@@ -1,0 +1,14 @@
+# Q-219 OIDC claims (payload only; raw token never printed)
+name: q219-oidc
+on: workflow_dispatch
+permissions: { contents: read, id-token: write }
+jobs:
+  claims:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          tok=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=katnya-lab" | jq -r .value)
+          echo "::add-mask::$tok"
+          p=$(printf %s "$tok" | cut -d. -f2 | tr '_-' '/+'); while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
+          printf %s "$p" | base64 -d | jq -c 'del(.jti)' | sed 's/^/LAB claims /'
+          echo "LAB repo_id=${{ github.repository_id }} owner_id=${{ github.repository_owner_id }}"
