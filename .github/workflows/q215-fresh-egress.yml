@@ -56,15 +56,15 @@ jobs:
         name: probes
         run: |
           T=$(command -v timeout || command -v gtimeout || true)
-          p() { if $T ${T:+20} "$@" >/dev/null 2>&1; then echo "LAB OK   $*"; else echo "LAB FAIL $*"; fi; }
-          p curl -fsS -m 15 https://api.github.com/zen
+          p() { o=$($T ${T:+20} "$@" 2>&1); rc=$?; echo "LAB rc=$rc $(echo "$o" | tail -1 | cut -c1-60) :: $*"; }
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://api.github.com/zen
           p git ls-remote https://github.com/${{ github.repository }} HEAD
-          p curl -fsS -m 15 -o /dev/null https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/README.md
-          p curl -fsS -m 15 -o /dev/null https://objects.githubusercontent.com/
-          p curl -fsS -m 15 -o /dev/null https://example.com/
-          p curl -fsS -m 15 -o /dev/null https://index.crates.io/config.json
-          p curl -fsS -m 15 -o /dev/null https://pipelines.actions.githubusercontent.com/
-          p curl -fsS -m 15 -o /dev/null https://results-receiver.actions.githubusercontent.com/
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/README.md
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://objects.githubusercontent.com/
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://example.com/
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://index.crates.io/config.json
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://pipelines.actions.githubusercontent.com/
+          p curl -sS -m 15 -o /dev/null -w http=%{http_code} https://results-receiver.actions.githubusercontent.com/
       - name: upload-artifact while locked
         uses: actions/upload-artifact@v7
         continue-on-error: true
@@ -74,7 +74,10 @@ jobs:
         run: for i in 1 2 3; do echo "LAB tick $i $(date +%T)"; sleep 20; done
       - name: unlock
         if: always()
-        run: sudo nft list chain inet katnya out | grep -E 'counter' | sed 's/^/LAB /'; sudo nft delete table inet katnya; echo "LAB unlocked"
+        run: |
+          sudo nft list chain inet katnya out | grep -o 'counter packets [0-9]* bytes [0-9]*' | sed 's/^/LAB dropped /'
+          sudo nft delete table inet katnya; echo "LAB unlocked"
+          sudo journalctl -k --no-pager | grep -o 'katnya-drop.*' | grep -o 'DST=[^ ]* .*DPT=[0-9]*' | sed -E 's/ LEN.*PROTO=/ /; s/ SPT=[0-9]*//' | sort | uniq -c | sort -rn | head -15 | sed 's/^/LAB drop /' 
   egress-macos:
     runs-on: macos-15
     timeout-minutes: 15
