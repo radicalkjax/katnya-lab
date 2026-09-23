@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: lock down (nftables default-deny output, allow lo, DNS, established, GitHub meta api/git/web)
         run: |
-          curl -fsS https://api.github.com/meta > meta.json
+          curl -fsS -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/meta > meta.json
           jq -r '(.api+.git+.web)[]' meta.json | grep -v : | sort -u | paste -sd, > v4.txt
           jq -r '(.api+.git+.web)[]' meta.json | grep : | sort -u | paste -sd, > v6.txt
           sudo nft -f - <<NFT
@@ -82,7 +82,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: lock down (pf default-deny out, allow lo0, DNS, GitHub meta api/git/web)
         run: |
-          curl -fsS https://api.github.com/meta > meta.json
+          curl -fsS -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/meta > meta.json
           jq -r '(.api+.git+.web)[]' meta.json | sort -u > gh.txt
           cat > pf.conf <<PF
           table <gh> persist file "$PWD/gh.txt"
